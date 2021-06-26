@@ -1,4 +1,4 @@
-package com.io.socket.nio;
+package com.io.socket.bio;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -18,9 +18,9 @@ public class SocketIOPropertites {
     private static final int RECEIVE_BUFFER = 10;
     private static final int SO_TIMEOUT = 0;
     private static final boolean REUSE_ADDR = false;
-    private static final int BACK_LOG = 2;          // 后备socket队列的大小，内核最多可以有1+2个socket的四元组建立
+    private static final int BACK_LOG = 2;          // 创建连接后备socket队列的大小，内核最多可以有1+2个socket的四元组建立
     //client socket listen property on server endpoint:
-    private static final boolean CLI_KEEPALIVE = false;
+    private static final boolean CLI_KEEPALIVE = false; // 会发包试探客户端是否还活着，客户端会回应，可以把一些死连接在内核占用的资源释放掉
     private static final boolean CLI_OOB = false;
     private static final int CLI_REC_BUF = 20;
     private static final boolean CLI_REUSE_ADDR = false;
@@ -28,7 +28,7 @@ public class SocketIOPropertites {
     private static final boolean CLI_LINGER = true;
     private static final int CLI_LINGER_N = 0;
     private static final int CLI_TIMEOUT = 0;
-    private static final boolean CLI_NO_DELAY = false;
+    private static final boolean CLI_NO_DELAY = false;  // 开启优化，在优化开启时会积攒超过sendBuffer大小的数据一起发送，某些情况下提高效率
 /*
 
     StandardSocketOptions.TCP_NODELAY
@@ -45,22 +45,22 @@ public class SocketIOPropertites {
 
         ServerSocket server = null;
         try {
+            // 创建连接的socket
             server = new ServerSocket();
             server.bind(new InetSocketAddress(9090), BACK_LOG);
             server.setReceiveBufferSize(RECEIVE_BUFFER);
             server.setReuseAddress(REUSE_ADDR);
             server.setSoTimeout(SO_TIMEOUT);
 
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        System.out.println("server up use 9090!");
-        try {
+
+            System.out.println("server up use 9090!");
+
             while (true) {
 
                 //分水岭,会发现socket建立在内核了，三次握手也ok了，buffer也分配了，等着server.accept()让内核分配文件标识符FD,然后app通过FD去对应的socket的buffer取数据
-                 System.in.read();
+                System.in.read();
 
+                // 传输数据的socket
                 Socket client = server.accept();  //阻塞的，没有 -1  一直卡着不动  accept(4,
                 System.out.println("client port: " + client.getPort());
 
@@ -100,9 +100,9 @@ public class SocketIOPropertites {
                             } catch (IOException e) {
                                 e.printStackTrace();
                             }
-
                         }
                 ).start();
+
 
             }
         } catch (IOException e) {

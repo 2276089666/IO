@@ -237,11 +237,16 @@ vm.dirty_writeback_centisecs = 500
 
 ## 3.TCP与Socket
 
+|                                              | 阻塞(读不到写不出时，代码卡在那) | 非阻塞（无论read/write成功与否都可以返回，执行后面代码） |
+| -------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| **同步（app自己完成系统调用read/write）**    | Bio                              | Nio,select.poll,epoll                                    |
+| **异步(kernel完成read/write,返回结果给app)** | 无                               | iocp(windows)，linux还没有                               |
+
 ### 3.1.Bio
 
 在linux上做实验，深入理解TCP，socket
 
-1. 将代码拷贝到linux,[Server代码](src/main/java/com/io/socket/nio/SocketIOPropertites.java)，[Client代码](src/main/java/com/io/socket/nio/SocketClient.java)
+1. 将代码拷贝到linux,[Server代码](src/main/java/com/io/socket/bio/SocketIOPropertites.java)，[Client代码](src/main/java/com/io/socket/bio/SocketClient.java)
 
 2. 编译我们的.java文件
 
@@ -321,11 +326,84 @@ vm.dirty_writeback_centisecs = 500
 
    ![image-20210625223135125](README.assets/image-20210625223135125.png)
 
-8. 当我开启多个client时，使用netstat  -natp 查看网络状态，只能有1+2个socket建立，只要前面的3个连接没断开，再来多少个客户端的socket都无法在内核建立，完成三次握手，和分配资源。
+8. 当我开启多个client时，使用netstat  -natp 查看网络状态，只能有1+2(**配置了： backlog=2**)个socket建立，只要前面的3个连接没断开，再来多少个客户端的socket都无法在内核建立，完成三次握手，和分配资源。
 
 9. 实验结束！！！
 
-### 3.2.实验总结
+#### 3.1.1.实验总结
+
+1. tcp在我们的文件标识符FD分配之前，即accept()调用之前，其实在内核已经建立连接，socket四元组已经创建好了，buffer资源已经分配。
+
+2. 只要四元组（Server IP ,Server Port , Client IP, Client Port）有任何一个维度不一样，我们的socket就可以建立
+
+3. 服务端不需要为每个client分配一个随机端口号，所以只要socket四元组唯一，就能确定哪两个进程在通讯，几百万个客户端连接都没问题
+
+4. 一个进程可以监听多个端口号
+
+   ![image-20210626095455600](README.assets/image-20210626095455600.png)
+
+
+
+#### 3.1.2.Socket在内核建立过程
+
+上面的Server端的代码，在内核级别的过程：
+
+![image-20210626114121879](README.assets/image-20210626114121879.png)
+
+**发现每来一个client的连接，Server（或者主线程main）分配不同的fd,新new Thread去拿着分配到的fd去内核的socket四元组的buffer接收数据和发送数据**
+
+### 3.2.Nio
+
+[c10K问题](http://www.kegel.com/c10k.html)
+
+```
+描述： 随着互联网的普及，应用的用户群体几何倍增长，此时服务器性能问题就出现。最初的服务器是基于进程/线程模型。新到来一个TCP连接，就需要分配一个进程。假如有C10K，就需要创建1W个进程，可想而知单机是无法承受的。那么如何突破单机性能是高性能网络编程必须要面对的问题，进而这些局限和问题就统称为C10K问题，最早是由Dan Kegel进行归纳和总结的，并且他也系统的分析和提出解决方案。
+
+```
+
+>解决方案：
+>
+>1. 每个连接分配一个独立的线程/进程（Bio 多线程）
+>2. 同一个线程/进程同时处理多个连接  （Nio）
+
+[nio代码](src/main/java/com/io/socket/nio/SocketNIO.java)
+
+#### 3.2.1.Nio的优缺点
+
+优点：
+
+```
+使用一个或几个线程解决了N个IO连接
+```
+
+缺点：
+
+```
+在读取recv数据的时候是遍历，很有可能众多连接中只有1到2个buffer中有数据，做了无用功，而且每次读取buffer都是系统调用，有用户态向内核态的切换，效率低
+```
+
+#### 3.2.2.多路复用器(select,poll)
+
+为了解决上面的Nio的遍历导致时间复杂度O(N)的系统调用,诞生了多路复用器
+
+多路复用器:
+
+>把所有的socket连接的文件标识符FD传给内核,内核去遍历, 返回给app哪些文件标识符可以read或者write的I/O操作,此处只触发了一次用户态到内核态的系统调用,而且还解决了上面遍历导致的没有数据需要读写但还是有系统调用做的无用功
+
+#### 3.2.3.多路复用器升级版(epoll)
+
+为了解决select和poll每次都要重复传文件标识符fd给内核,内核针对这个调用最终还会遍历全量fd,由此诞生了epoll
+
+epoll:
+
+>1. server在监听socket建立时就会触发epoll_create的系统调用,创建一个文件标识符为fd6的区域(红黑树)去存储我们的所有当前进程的fd,和有状态的fd的链表
+>2. 调用epoll_ctl把我们的key: fd4   value:accpet(状态) 添加到红黑树中
+>3. 客户端来通过中断创建了一个连接,分配了一个fd7,内核会重复1.2步把fd7添加到红黑树中
+>4. 客户端fd7发送了一些数据,内核中断响应后,会把红黑树中fd7的状态改为read,并把fd7 copy到链表中
+>5. server调用epoll时,会触发epoll_wait去链表中拿有状态的fd7,并通过系统调用中断去read/write数据,与此同时内核会更新fd7的状态
+>6. 做到epool_wait不存在遍历行为,不用重复传递fd
+
+![image-20210626222234538](README.assets/image-20210626222234538.png)
 
 
 

@@ -1,4 +1,4 @@
-package com.io.socket.nio;
+package com.io.socket.bio;
 
 import java.io.*;
 import java.net.Socket;
@@ -12,7 +12,7 @@ public class SocketClient {
             Socket client = new Socket("192.168.18.129",9090);
 
             client.setSendBufferSize(20);
-            client.setTcpNoDelay(true);
+            client.setTcpNoDelay(true);   // 关闭优化，在优化开启时会积攒超过sendBuffer大小的数据一起发送，某些情况下提高效率
             OutputStream out = client.getOutputStream();
 
             InputStream in = System.in;
