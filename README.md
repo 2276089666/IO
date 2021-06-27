@@ -341,8 +341,24 @@ vm.dirty_writeback_centisecs = 500
 4. 一个进程可以监听多个端口号
 
    ![image-20210626095455600](README.assets/image-20210626095455600.png)
+   
+5. tcp三次挥手
 
+   ![image-20210627181127687](README.assets/image-20210627181127687.png)
 
+6. tcp得四次挥手之间得状态
+
+   ![image-20210627174646532](README.assets/image-20210627174646532.png)
+
+   - **client要求断开连接时,server端的连接socket忘记close时**:
+
+     > 会导致server的socket的状态是**close-wait**,client的状态是**fin-wait-2**
+
+   - **tcp四次挥手正常结束时,请求断开连接的方,最后等待2MSL**
+
+     >好处:	防止第四次挥手报文丢失,被要求断开连接方会重发第三次挥手报文,先要求断开连接方还能收到第三次挥手报文,重发第四次挥手报文,并重置2MSL时间等待
+     >
+     >坏处:	2MSL时间内,server端socket四元组还没释放,消耗了一个client端的socket四元组的连接个数,server端不受影响,受影响的是client(**client是请求断开连接的发起者**)
 
 #### 3.1.2.Socket在内核建立过程
 
@@ -382,7 +398,7 @@ vm.dirty_writeback_centisecs = 500
 在读取recv数据的时候是遍历，很有可能众多连接中只有1到2个buffer中有数据，做了无用功，而且每次读取buffer都是系统调用，有用户态向内核态的切换，效率低
 ```
 
-#### 3.2.2.多路复用器(select,poll)
+#### 3.2.2.OS多路复用器(select,poll)
 
 为了解决上面的Nio的遍历导致时间复杂度O(N)的系统调用,诞生了多路复用器
 
@@ -390,20 +406,209 @@ vm.dirty_writeback_centisecs = 500
 
 >把所有的socket连接的文件标识符FD传给内核,内核去遍历, 返回给app哪些文件标识符可以read或者write的I/O操作,此处只触发了一次用户态到内核态的系统调用,而且还解决了上面遍历导致的没有数据需要读写但还是有系统调用做的无用功
 
-#### 3.2.3.多路复用器升级版(epoll)
+#### 3.2.3.OS多路复用器升级版(epoll)
 
 为了解决select和poll每次都要重复传文件标识符fd给内核,内核针对这个调用最终还会遍历全量fd,由此诞生了epoll
 
 epoll:
 
->1. server在监听socket建立时就会触发epoll_create的系统调用,创建一个文件标识符为fd6的区域(红黑树)去存储我们的所有当前进程的fd,和有状态的fd的链表
->2. 调用epoll_ctl把我们的key: fd4   value:accpet(状态) 添加到红黑树中
->3. 客户端来通过中断创建了一个连接,分配了一个fd7,内核会重复1.2步把fd7添加到红黑树中
->4. 客户端fd7发送了一些数据,内核中断响应后,会把红黑树中fd7的状态改为read,并把fd7 copy到链表中
->5. server调用epoll时,会触发epoll_wait去链表中拿有状态的fd7,并通过系统调用中断去read/write数据,与此同时内核会更新fd7的状态
->6. 做到epool_wait不存在遍历行为,不用重复传递fd
+>1. server在调用Selector.open()时就会触发epoll_create的系统调用,创建一个文件标识符为fd6的区域(红黑树)去存储我们的所有当前进程的fd,和有状态的fd的链表
+>2. server.register()会触发系统调用epoll_ctl把我们的key: fd4   value:EPOLLIN (状态) 添加到红黑树中
+>3. 客户端来通过中断创建了一个连接,分配了一个fd7, 然后调用client.register()内核会重复第2步把key: fd7  value:EPOLLIN (状态)添加到红黑树中
+>4. 客户端fd7发送了一些数据,内核中断响应后,会把红黑树中fd7的状态改为有状态(可读或可写),并把fd7 copy到链表中
+>5. selector.selectedKeys时,会触发epoll_wait去链表中拿所有有状态的fd,本例fd7
+>6. 我们自己对有状态的fd进行系统调用read/write数据,与此同时内核会更新fd7的状态
+>7. 最终做到epool_wait不存在遍历行为,不用重复传递fd
+
+**注**:select,poll没有在内核开辟空间管理fd,但是jvm会维护一个fd的集合
 
 ![image-20210626222234538](README.assets/image-20210626222234538.png)
 
+#### 3.2.4.Java对多路复用器的抽象
 
+java使用一套代码对我们的两种多路复用器来进行操作
+
+````java
+package com.io.socket.selector;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
+import java.util.Set;
+
+/**
+ * JVM启动参数可以选择os的不同多路复用器的实现,没配置启动参数,JVM优先选择是epoll
+ *  -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.EPollSelectorProvider
+ *  -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.PollSelectorProvider
+ */
+public class SocketMultiplexingSingleThreadV1 {
+
+
+    private ServerSocketChannel server = null;
+    // 多路复用器
+    private Selector selector = null;
+    int port = 9090;
+
+    public void initServer() {
+        try {
+            server = ServerSocketChannel.open();
+            server.configureBlocking(false);
+            server.bind(new InetSocketAddress(port));
+
+
+            // 根据jvm的启动参数,如果是epoll则会触发 epoll_create fd6
+            selector = Selector.open();
+
+            //server 约等于 listen状态的 fd4
+            //register:
+            //    如果选用os的select，poll：jvm里开辟一个数组 fd4 放进去
+            //    如果选用os的epoll会触发epoll_ctl(fd6,ADD,fd4,EPOLLIN),但是是懒加载,等到select()调用时才触发
+            server.register(selector, SelectionKey.OP_ACCEPT);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void start() {
+        initServer();
+        System.out.println("服务器启动了。。。。。");
+        try {
+            while (true) {
+
+                Set<SelectionKey> keys = selector.keys();
+                System.out.println(keys.size()+"   size");
+
+
+                /*
+                selector.select()无参的时候当有状态的fd集合为空的时候是阻塞的
+                底层调用os的:
+                    1，select，poll  其实是内核的select（fd4）  poll(fd4)
+                    2，epoll：  其实是内核的 epoll_wait()
+                selector.wakeup()  叫醒阻塞的select()
+                 */
+                while (selector.select() > 0) {
+                    Set<SelectionKey> selectionKeys = selector.selectedKeys();  //返回的有状态的fd集合
+                    Iterator<SelectionKey> iter = selectionKeys.iterator();
+
+                    while (iter.hasNext()) {
+                        SelectionKey key = iter.next();
+                        iter.remove(); //set  不移除会重复循环处理
+                        if (key.isAcceptable()) {
+                            //看代码的时候，这里是重点，如果要去接受一个新的连接
+                            //语义上，accept接受连接且返回新连接的FD对吧？
+                            //那新的FD怎么办？
+                            //select，poll，因为他们内核没有空间，那么在jvm中保存和前边的fd4那个listen的一起
+                            //epoll： 我们希望通过epoll_ctl把新的客户端fd注册到内核空间的红黑树
+                            acceptHandler(key);
+                        } else if (key.isReadable()) {
+                            //连read 还有 write都处理了
+                            //在当前线程，这个方法可能会阻塞  ，如果阻塞了十年，其他的IO早就。。。
+                            //所以，为什么提出了 IO THREADS
+                            //redis  是不是用了epoll，redis是不是有个io threads的概念 ，redis是不是单线程的
+                            //tomcat 8,9  异步的处理方式  IO  和   处理上  解耦
+                            readHandler(key);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void acceptHandler(SelectionKey key) {
+        try {
+            ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+            SocketChannel client = ssc.accept(); //来啦，目的是调用accept接受客户端  fd4
+            client.configureBlocking(false);
+
+            ByteBuffer buffer = ByteBuffer.allocate(8192);
+
+            //register:
+            //    如果选用os的select，poll：jvm里开辟一个数组 fd5 放进去
+            //    如果选用os的epoll会触发epoll_ctl(fd6,ADD,fd5,EPOLLIN)
+            client.register(selector, SelectionKey.OP_READ, buffer);
+            System.out.println("-------------------------------------------");
+            System.out.println("新客户端：" + client.getRemoteAddress());
+            System.out.println("-------------------------------------------");
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void readHandler(SelectionKey key) {
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer buffer = (ByteBuffer) key.attachment();
+        buffer.clear();
+        int read = 0;
+        try {
+            while (true) {
+                read = client.read(buffer);
+                if (read > 0) {
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                        client.write(buffer);
+                    }
+                    buffer.clear();
+                } else if (read == 0) {
+                    break;
+                } else {
+                    client.close();
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+
+        }
+    }
+
+    public static void main(String[] args) {
+        SocketMultiplexingSingleThreadV1 service = new SocketMultiplexingSingleThreadV1();
+        service.start();
+    }
+}
+````
+
+[多路复用器单线程版本](src/main/java/com/io/socket/selector/SocketMultiplexingSingleThreadV1.java)
+
+#### 3.2.5.trance追踪java的selector的系统调用
+
+1. 将代码拷贝到对应的环境
+
+   ```shell
+   # 生成out.15654的追踪文件
+   strace -ff -o out java com.io.socket.selector.SocketMultiplexingSingleThreadV1
+   # 显示行号
+    :set nu
+   # 搜索epoll
+    / epoll
+   ```
+
+   ![image-20210627155145016](README.assets/image-20210627155145016.png)
+
+同一套代码两个模型的不同系统调用
+
+![image-20210627155421787](README.assets/image-20210627155421787.png)
+
+#### 3.2.6.传统多路复用器造成的问题与改进
+
+1. 由于readHandler万一阻塞,或者请求量过大,而程序对所有得fd得处理只有一个线程线性执行,后面的所有的有状态的read/write都得完蛋,所以改用多线程去执行
+
+   [多路复用器多线程代码](src/main/java/com/io/socket/selector/SocketMultiplexingSingleThreadV2.java)
+
+   >为了解决由于异步带来延迟,造成可能重复读写,上面得代码采用
+   >
+   >```java
+   >//系统epoll_ctl(fd6,DELE,fd4,EPOLLIN)调用从红黑树中移除该文件描述符状态
+   >key.cancel();
+   >```
+
+2. 由于key.cancel();造成系统调用也会有性能损耗,我们改用多个selector执行,每个selector用一个线程线性执行不会有重复消费得问题
 
