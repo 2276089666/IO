@@ -342,11 +342,11 @@ vm.dirty_writeback_centisecs = 500
 
    ![image-20210626095455600](README.assets/image-20210626095455600.png)
    
-5. tcp三次挥手
+5. tcp三次握手
 
    ![image-20210627181127687](README.assets/image-20210627181127687.png)
 
-6. tcp得四次挥手之间得状态
+6. tcp得四次挥手
 
    ![image-20210627174646532](README.assets/image-20210627174646532.png)
 
@@ -611,4 +611,20 @@ public class SocketMultiplexingSingleThreadV1 {
    >```
 
 2. 由于key.cancel();造成系统调用也会有性能损耗,我们改用多个selector执行,每个selector用一个线程线性执行不会有重复消费得问题
+
+   >[混杂模式代码](src/main/java/com/io/socket/selector/multipleSelector/MainThread.java)
+   >
+   >一个SelectorThreadGroup组里面有多个线程SelectorThread,每个SelectorThread是一个selector,由SelectorThreadGroup选定server listen和client去哪个selector里面注册,SelectorThread有read/write的处理逻辑
+
+3. 创建多个SelectorThreadGroup,接收请求的SelectorThreadGroup我们的boss组专门处理accept,俗称I/O Thread,然后由I/O的SelectorThreadGroup将read/write分配到新的SelectorThreadGroup我们的Worker组,在worker组里面的线程专门处理read/write,将接收和处理分开
+
+   >[多group模式代码](src/main/java/com/io/socket/selector/multipleSelectorV2/MainThread.java)
+   >
+   >![image-20210709165230296](README.assets/image-20210709165230296.png)
+   >
+   >代码模仿netty的架构图编写
+   >
+   ><img src="README.assets/image-20210709153824314.png" alt="image-20210709153824314" style="zoom:80%;" />
+
+
 
