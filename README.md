@@ -626,5 +626,178 @@ public class SocketMultiplexingSingleThreadV1 {
    >
    ><img src="README.assets/image-20210709153824314.png" alt="image-20210709153824314" style="zoom:80%;" />
 
+## 4.Netty
+
+### 4.1.ByteBuf
+
+netty对JDK的bytebuffer进行了封装,有多个指针,不再需要翻转buffer进行读写切换了,还提供了pool(池)化的概念
+
+```java
+ 		System.out.println("buf.isReadable()    :"+buf.isReadable());
+        System.out.println("buf.readerIndex()   :"+buf.readerIndex());
+        System.out.println("buf.readableBytes() :"+buf.readableBytes());
+        System.out.println("buf.isWritable()    :"+buf.isWritable());
+        System.out.println("buf.writerIndex()   :"+buf.writerIndex());
+        System.out.println("buf.writableBytes() :"+buf.writableBytes());
+        System.out.println("buf.capacity()      :"+buf.capacity());
+        System.out.println("buf.maxCapacity()   :"+buf.maxCapacity());
+        System.out.println("buf.isDirect()      :"+buf.isDirect());
+        System.out.println("=================================");
+```
+
+[测试代码](src/main/java/com/io/test/TestNettyByteBuf.java)
+
+### 4.2.客户端编写流程
+
+```java
+	@Test
+    public void client() throws InterruptedException {
+        NioSocketChannel client = new NioSocketChannel();
+
+        // pipeline,给出read/write的处理逻辑
+        ChannelPipeline pipeline = client.pipeline();
+        pipeline.addLast(new ReadWriteHandler());
+
+        // 相当于一个线程池,里面初始化了一个线程,就是我们的selector
+        NioEventLoopGroup selector = new NioEventLoopGroup(1);
+        // 注册和之前的JDK的方式不一样,之前是client.register(selector,SelectionKey.OP_ACCEPT)
+        selector.register(client);
 
 
+        // 必须先register再连接,并且连接和发送都是异步的,由于得先连接再发送,所以得sync
+        ChannelFuture connect = client.connect(new InetSocketAddress("172.16.136.145", 9090));
+        connect.sync();
+
+
+        // write
+        ByteBuf byteBuf = Unpooled.copiedBuffer("hello server ~".getBytes());
+        ChannelFuture send = client.writeAndFlush(byteBuf);
+        send.sync();
+
+
+        // 用异步感知,是否断开连接
+        connect.channel().closeFuture().sync();
+        System.out.println("over ...");
+    }
+```
+
+1. 创建NioSocketChannel就是我们的Socket
+
+2. 利用Reactor 响应式编程的思想,ChannelPipeline addLast(),预埋我们有read/write的操作编写一些业务处理逻辑[ReadWriteHandler](src/main/java/com/io/socket/netty/ReadWriteHandler.java)
+
+3. 创建NioEventLoopGroup,它是一个线程池,每个线程就是一个selector
+
+4. selector.register(client)向我们的多路复用器注册我们的客户端
+
+5. client.connect(new InetSocketAddress("172.16.136.145", 9090)); 采用异步的方式连接server
+
+6. client.writeAndFlush(byteBuf)写内容,发送给server
+
+7. connect.channel().closeFuture().sync()感知是否断开,没断开一直保持连接
+
+   **注意**: 使用[MyChannelInitializer](src/main/java/com/io/socket/netty/MyChannelInitializer.java)类对ReadWriteHandler无法@ChannelHandler.Sharable得窘境解耦
+
+   [使用Neety API手写Client代码](src/main/java/com/io/socket/netty/client/TestNettyClient.java)
+
+### 4.3.服务端编写流程
+
+```java
+	@Test
+    public void Server() throws InterruptedException {
+        NioServerSocketChannel server = new NioServerSocketChannel();
+
+        NioEventLoopGroup selector = new NioEventLoopGroup(1);
+
+        ChannelPipeline pipeline = server.pipeline();
+        // AcceptHandler accept接收客户端，并且把client注册到selector,两件事
+        // 复用ReadWriteHandler去处理read/write
+        pipeline.addLast(new AcceptHandler(new ReadWriteHandler(),selector));
+
+        selector.register(server);
+
+        ChannelFuture bind = server.bind(new InetSocketAddress(9090));
+        bind.sync();
+
+        bind.sync().channel().closeFuture().sync();
+        System.out.println("server close...");
+    }
+```
+
+
+
+1. 创建NioServerSocketChannel,也就是我们得ServerSocket
+
+2. 创建NioEventLoopGroup,它是一个线程池,每个线程就是一个selector
+
+3. 利用Reactor 响应式编程的思想,ChannelPipeline  addLast() ,预埋我们得[AcceptHandle](src/main/java/com/io/test/AcceptHandler.java)r,去完成accept和register两件事
+
+4. selector.register(client)向我们的多路复用器注册我们的客户端
+
+5. bind
+
+6. 感知bind.sync().channel().closeFuture().sync(),感知是否断开,没断开一直保持连接
+
+   [使用Neety API手写Server代码](src/main/java/com/io/socket/netty/server/TestNettyServer.java)
+
+### 4.4.Netty API方式编写Client
+
+**每行代码逻辑和4.2章得相互呼应**
+
+```java
+	@Test
+    public void client() throws InterruptedException {
+        ChannelFuture connect = new Bootstrap()
+                .group(new NioEventLoopGroup(1))
+                .channel(NioSocketChannel.class)
+                // 和我的MyChannelInitializer作用类似
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        ChannelPipeline pipeline = nioSocketChannel.pipeline();
+                        pipeline.addLast(new ReadWriteHandler());
+                    }
+                })
+                .connect(new InetSocketAddress("172.16.136.145", 9090));
+
+        Channel client = connect.sync().channel();
+
+        // write
+        ByteBuf byteBuf = Unpooled.copiedBuffer("hello server ~".getBytes());
+        ChannelFuture send = client.writeAndFlush(byteBuf);
+        send.sync();
+
+
+        // 用异步感知,是否断开连接
+        connect.channel().closeFuture().sync();
+        System.out.println("over ...");
+    }
+```
+
+[代码](src/main/java/com/io/socket/netty/useAPI/NettyClient.java)
+
+### 4.5.Netty API方式编写Server
+
+**每行代码逻辑和4.3章得相互呼应**
+
+```java
+ 	@Test
+    public void server() throws InterruptedException {
+        ChannelFuture bind = new ServerBootstrap()
+                .group(new NioEventLoopGroup(1))
+                .channel(NioServerSocketChannel.class)
+                // 不需要acceptHandler帮我们处理register了,框架帮我们干了
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                        ChannelPipeline pipeline = nioSocketChannel.pipeline();
+                        pipeline.addLast(new ReadWriteHandler());
+                    }
+                })
+                .bind(new InetSocketAddress(9090));
+
+        bind.sync().channel().closeFuture().sync();
+        System.out.println("server close...");
+    }
+```
+
+[代码](src/main/java/com/io/socket/netty/useAPI/NettyServer.java)
