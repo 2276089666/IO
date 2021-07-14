@@ -414,10 +414,10 @@ epoll:
 
 >1. server在调用Selector.open()时就会触发epoll_create的系统调用,创建一个文件标识符为fd6的区域(红黑树)去存储我们的所有当前进程的fd,和有状态的fd的链表
 >2. server.register()会触发系统调用epoll_ctl把我们的key: fd4   value:EPOLLIN (状态) 添加到红黑树中
->3. 客户端来通过中断创建了一个连接,分配了一个fd7, 然后调用client.register()内核会重复第2步把key: fd7  value:EPOLLIN (状态)添加到红黑树中
+>3. 客户端来通过中断创建了一个连接,分配了一个fd7(**图中没有**), 然后调用client.register()内核会重复第2步把key: fd7  value:EPOLLIN (状态)添加到红黑树中
 >4. 客户端fd7发送了一些数据,内核中断响应后,会把红黑树中fd7的状态改为有状态(可读或可写),并把fd7 copy到链表中
->5. selector.selectedKeys时,会触发epoll_wait去链表中拿所有有状态的fd,本例fd7
->6. 我们自己对有状态的fd进行系统调用read/write数据,与此同时内核会更新fd7的状态
+>5. selector.selectedKeys时,会触发epoll_wait去链表中拿所有有状态的fd,本例fd4(**处理连接accept**),fd7(**处理read/write**)
+>6. 我们自己对有状态的fd进行系统调用**处理accept**或**read/write数据**,与此同时内核会更新fd4,fd7的状态
 >7. 最终做到epool_wait不存在遍历行为,不用重复传递fd
 
 **注**:select,poll没有在内核开辟空间管理fd,但是jvm会维护一个fd的集合
@@ -801,3 +801,43 @@ netty对JDK的bytebuffer进行了封装,有多个指针,不再需要翻转buffer
 ```
 
 [代码](src/main/java/com/io/socket/netty/useAPI/NettyServer.java)
+
+## 5.RPC
+
+### 5.1.Client
+
+1. client创建多个线程,每个线程代表一个client
+2. 在调用远程方法之前
+3. 动态代理生成远程的接口的实现类,自定义消息头header和消息体content变成数据包msgPack
+4. 对需要发送的数据编码成byte[]
+5. 设置CompletableFuture回调
+6. 然后将需要调用某个方法数据包发给server
+7. CompletableFuture阻塞client的调用线程,调用完成时,返回得到的值,即方法的返回参数
+
+### 5.2.Server
+
+1. 利用netty的reactor模型接收数据
+2. 解码数据
+3. 处理数据,得到需要调用的方法,并调用
+4. 得到方法得返回值,写回数据
+
+### 5.3.难点
+
+- 设置了client的连接数量,即我们的socket连接  ClientPool(单例)
+
+- 复用我们的client的连接,或创建远程连接,设置相关的handler   ClientFactory(单例)
+
+- 编码 ObjectToByteArray
+
+- 对ChannelPipeline堆积的bytebuf解码,解决粘包问题
+
+  >粘包问题原因:
+  >
+  >```
+  >当多个线程复用一个连接时,即同一个socket连接,当bytebuf的大小不是我们对象的byte[]大小的整数倍时,一定会出现粘包的情况,多个 header body header body header body连在了一起,但是不是一个bytebuf,我们一次只能读取一个bytebuf,会导致某些bytebuf里面的数据缺胳膊少腿,不是一个完整对象,无法实现序列化
+  >```
+  >
+  >![image-20210714152454089](README.assets/image-20210714152454089.png)
+
+  
+
