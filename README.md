@@ -240,7 +240,7 @@ vm.dirty_writeback_centisecs = 500
 |                                              | 阻塞(读不到写不出时，代码卡在那) | 非阻塞（无论read/write成功与否都可以返回，执行后面代码） |
 | -------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
 | **同步（app自己完成系统调用read/write）**    | Bio                              | Nio,select.poll,epoll                                    |
-| **异步(kernel完成read/write,返回结果给app)** | 无                               | iocp(windows)，linux还没有                               |
+| **异步(kernel完成read/write,返回结果给app)** | 无                               | **AIO** : iocp(windows)，linux还没有                     |
 
 ### 3.1.Bio
 
@@ -382,9 +382,58 @@ vm.dirty_writeback_centisecs = 500
 >1. 每个连接分配一个独立的线程/进程（Bio 多线程）
 >2. 同一个线程/进程同时处理多个连接  （Nio）
 
+#### 3.2.1.Nio的优缺点
+
 [nio代码](src/main/java/com/io/socket/nio/SocketNIO.java)
 
-#### 3.2.1.Nio的优缺点
+特点:
+
+```shell
+#使用ServerSocketChanne,Channe的accept(),read()等方法不阻塞,我们把建立了连接client丢到list里面,一个线程处理完accept就过来遍历list,看list里面的连接是否有数据需要read/write,没有就跳过,遍历下一个,非阻塞
+ public static void main(String[] args) throws Exception {
+
+        LinkedList<SocketChannel> clients = new LinkedList<>();
+
+        ServerSocketChannel ss = ServerSocketChannel.open();  //服务端开启监听：接受客户端
+        ss.bind(new InetSocketAddress(9090));
+        ss.configureBlocking(false); //OS  NONBLOCKING!!!  保证监听的accept的系统调用是非阻塞的，没人连代码继续往下走
+
+
+        while (true) {
+            //接受客户端的连接
+            Thread.sleep(1000);
+            // 无论是否有连接，代码都会往下走，不会阻塞
+            SocketChannel client = ss.accept(); // 系统调用accept,无连接不阻塞返回-1，java封装成无连接返回NULL
+
+
+            if (client == null) {
+                System.out.println("null.....");
+            } else {
+                client.configureBlocking(false); // 分配了fd的socket设为非阻塞的，保证接收读取文件的recv是非阻塞的
+                int port = client.socket().getPort();
+                System.out.println("client..port: " + port);
+                clients.add(client);
+            }
+
+            ByteBuffer buffer = ByteBuffer.allocateDirect(4096);  //可以在堆里   堆外
+
+            // 随着连接个数变多，这个集合也会变大，遍历起来也会变慢，连接的创建速度就会变慢
+            //遍历已经链接进来的客户端能不能读写数据
+            for (SocketChannel c : clients) {   //串行化！！！！  多线程！！
+                int num = c.read(buffer);  // >0  -1  0   //不会阻塞
+                if (num > 0) {
+                    buffer.flip();
+                    byte[] aaa = new byte[buffer.limit()];
+                    buffer.get(aaa);
+
+                    String b = new String(aaa);
+                    System.out.println(c.socket().getPort() + " : " + b);
+                    buffer.clear();
+                }
+            }
+        }
+    }
+```
 
 优点：
 
@@ -599,7 +648,7 @@ public class SocketMultiplexingSingleThreadV1 {
 
 #### 3.2.6.传统多路复用器造成的问题与改进
 
-1. 由于readHandler万一阻塞,或者请求量过大,而程序对所有得fd得处理只有一个线程线性执行,后面的所有的有状态的read/write都得完蛋,所以改用多线程去执行
+1. 由于readHandler代码逻辑复杂耗时长,万一阻塞,或者请求量过大,而程序对所有得fd得处理只有一个线程线性执行,后面的所有的有状态的read/write都得完蛋,所以改用多线程去执行
 
    [多路复用器多线程代码](src/main/java/com/io/socket/selector/SocketMultiplexingSingleThreadV2.java)
 
@@ -625,6 +674,75 @@ public class SocketMultiplexingSingleThreadV1 {
    >代码模仿netty的架构图编写
    >
    ><img src="README.assets/image-20210709153824314.png" alt="image-20210709153824314" style="zoom:80%;" />
+
+### 3.3.Aio
+
+```
+由于多路复用器的Nio的selector.select()会阻塞,只有来了一个client请求(连接或read/write)再调用wakeUp解除阻塞.还是会有阻塞
+Aio:  纯非阻塞,预埋ReadHandler等,基于Reactor响应式编程,有连接过来就调用我们预埋的Handler,由kernel完成read/write,返回结果给app,
+      如果没有连接,程序调用accept()后直接终止,除非自己手动阻塞
+```
+
+```java
+ public void server() throws IOException {
+        /**
+         *  带Group的
+         */
+//        ExecutorService executorService = Executors.newCachedThreadPool();
+//        AsynchronousChannelGroup threadGroup = AsynchronousChannelGroup.withCachedThreadPool(executorService, 1);
+//
+//        final AsynchronousServerSocketChannel serverChannel = AsynchronousServerSocketChannel.open(threadGroup)
+//                .bind(new InetSocketAddress(9090));
+
+
+        final AsynchronousServerSocketChannel serverChannel = AsynchronousServerSocketChannel.open()
+                .bind(new InetSocketAddress(9090));
+        serverChannel.accept(null, new CompletionHandler<AsynchronousSocketChannel, Object>() {
+            @Override
+            public void completed(AsynchronousSocketChannel client, Object attachment) {
+                serverChannel.accept(null, this);
+                try {
+                    System.out.println(client.getRemoteAddress());
+                    ByteBuffer buffer = ByteBuffer.allocate(1024);
+                    client.read(buffer, buffer, new CompletionHandler<Integer, ByteBuffer>() {
+                        @Override
+                        public void completed(Integer result, ByteBuffer attachment) {
+                            attachment.flip();
+                            System.out.println(new String(attachment.array(), 0, result));
+                            client.write(ByteBuffer.wrap("HelloClient".getBytes()));
+                        }
+
+                        @Override
+                        public void failed(Throwable exc, ByteBuffer attachment) {
+                            exc.printStackTrace();
+                        }
+                    });
+
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void failed(Throwable exc, Object attachment) {
+                exc.printStackTrace();
+            }
+        });
+
+        // aio纯非阻塞,有连接过来就调用我们预埋的Handler,由kernel完成read/write,返回结果给app,
+        // 如果没有连接,程序调用accept()后直接终止,除非自己手动阻塞
+        System.in.read();
+    }
+```
+
+**注意:**Linux还没有kernel完成read/write,返回结果给app的功能,只有windows有,由于java程序主要运行在linux上.
+
+**所以,Netty还是nio使用selector,但是封装成aio一样,预埋handler,基于Reactor模式编程**
+
+[Aio的Server代码](src/main/java/com/io/socket/aio/AioServer.java)
+
+[Aio的Client代码](src/main/java/com/io/socket/aio/AioClient.java)
 
 ## 4.Netty
 
