@@ -19,26 +19,31 @@ import java.net.InetSocketAddress;
 public class NettyServer {
 
     @Test
-    public void server() throws InterruptedException {
+    public void server(){
         NioEventLoopGroup boss = new NioEventLoopGroup(1);
         NioEventLoopGroup worker = new NioEventLoopGroup(10);
 
-        ChannelFuture bind = new ServerBootstrap()
-                .group(boss,worker)
-                .channel(NioServerSocketChannel.class)
-                // 不需要acceptHandler帮我们处理register了,框架帮我们干了
-                .childHandler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
-                        ChannelPipeline pipeline = nioSocketChannel.pipeline();
-                        pipeline.addLast(new ReadWriteHandler());
-                    }
-                })
-                .bind(new InetSocketAddress(9090));
+        try {
+            ChannelFuture bind = new ServerBootstrap()
+                    .group(boss,worker)
+                    .channel(NioServerSocketChannel.class)
+                    // 不需要acceptHandler帮我们处理register了,框架帮我们干了
+                    .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                        @Override
+                        protected void initChannel(NioSocketChannel nioSocketChannel) throws Exception {
+                            ChannelPipeline pipeline = nioSocketChannel.pipeline();
+                            pipeline.addLast(new ReadWriteHandler());
+                        }
+                    })
+                    .bind(new InetSocketAddress(9090));
 
-        bind.sync().channel().closeFuture().sync();
-        boss.shutdownGracefully();
-        worker.shutdownGracefully();
+            bind.sync().channel().closeFuture().sync();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            boss.shutdownGracefully();
+            worker.shutdownGracefully();
+        }
         System.out.println("server close...");
     }
 }
