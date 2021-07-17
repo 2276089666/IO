@@ -23,8 +23,9 @@ public class NettyClient {
 
     @Test
     public void client() throws InterruptedException {
+        NioEventLoopGroup worker = new NioEventLoopGroup(1);
         ChannelFuture connect = new Bootstrap()
-                .group(new NioEventLoopGroup(1))
+                .group(worker)
                 .channel(NioSocketChannel.class)
                 // 和我的MyChannelInitializer作用类似
                 .handler(new ChannelInitializer<NioSocketChannel>() {
@@ -34,7 +35,7 @@ public class NettyClient {
                         pipeline.addLast(new ReadWriteHandler());
                     }
                 })
-                .connect(new InetSocketAddress("172.16.136.145", 9090));
+                .connect(new InetSocketAddress("localhost", 9090));
 
         Channel client = connect.sync().channel();
 
@@ -46,6 +47,7 @@ public class NettyClient {
 
         // 用异步感知,是否断开连接
         connect.channel().closeFuture().sync();
+        worker.shutdownGracefully();
         System.out.println("over ...");
     }
 }

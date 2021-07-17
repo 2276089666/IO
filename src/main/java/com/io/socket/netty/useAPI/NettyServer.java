@@ -20,8 +20,11 @@ public class NettyServer {
 
     @Test
     public void server() throws InterruptedException {
+        NioEventLoopGroup boss = new NioEventLoopGroup(1);
+        NioEventLoopGroup worker = new NioEventLoopGroup(10);
+
         ChannelFuture bind = new ServerBootstrap()
-                .group(new NioEventLoopGroup(1))
+                .group(boss,worker)
                 .channel(NioServerSocketChannel.class)
                 // 不需要acceptHandler帮我们处理register了,框架帮我们干了
                 .childHandler(new ChannelInitializer<NioSocketChannel>() {
@@ -34,6 +37,8 @@ public class NettyServer {
                 .bind(new InetSocketAddress(9090));
 
         bind.sync().channel().closeFuture().sync();
+        boss.shutdownGracefully();
+        worker.shutdownGracefully();
         System.out.println("server close...");
     }
 }

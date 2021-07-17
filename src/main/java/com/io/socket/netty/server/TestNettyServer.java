@@ -32,6 +32,7 @@ public class TestNettyServer {
         bind.sync();
 
         bind.sync().channel().closeFuture().sync();
+        selector.shutdownGracefully();
         System.out.println("server close...");
     }
 }

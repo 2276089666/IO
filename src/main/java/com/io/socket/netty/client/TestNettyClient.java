@@ -47,6 +47,7 @@ public class TestNettyClient {
 
         // 用异步感知,是否断开连接
         connect.channel().closeFuture().sync();
+        selector.shutdownGracefully();
         System.out.println("over ...");
     }
 }
