@@ -8,6 +8,7 @@ import java.io.ObjectOutputStream;
  * @Author ws
  * @Date 2021/7/14 9:40
  */
+// 使用序列化的方式编码
 public class ObjectToByteArray {
 
     static ByteArrayOutputStream baos = new ByteArrayOutputStream();

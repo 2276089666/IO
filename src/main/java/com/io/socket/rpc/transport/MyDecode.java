@@ -17,6 +17,7 @@ import java.util.List;
  * @Author ws
  * @Date 2021/7/14 8:37
  */
+// 序列化的方式解码
 // 把ByteBuf变成我们的对象MsgPack
 public class MyDecode extends ByteToMessageDecoder {
     // ByteToMessageDecoder.channelRead()会把上一次bytebuf装不下,而截断的对象,合并到下一次的bytebuf中,再次序列化(重写的这个decode()方法)
