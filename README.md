@@ -901,7 +901,8 @@ netty对JDK的bytebuffer进行了封装,有多个指针,不再需要翻转buffer
  	@Test
     public void server() throws InterruptedException {
         ChannelFuture bind = new ServerBootstrap()
-                .group(new NioEventLoopGroup(1))
+                 //           boss                                worker   
+                .group(new NioEventLoopGroup(1),new NioEventLoopGroup(10))
                 .channel(NioServerSocketChannel.class)
                 // 不需要acceptHandler帮我们处理register了,框架帮我们干了
                 .childHandler(new ChannelInitializer<NioSocketChannel>() {

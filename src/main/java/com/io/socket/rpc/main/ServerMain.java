@@ -37,7 +37,7 @@ public class ServerMain {
                 .childHandler(new ChannelInitializer<NioSocketChannel>() {
                     @Override
                     protected void initChannel(NioSocketChannel ch) throws Exception {
-                        System.out.println("server accept cliet port: "+ ch.remoteAddress().getPort());
+                        System.out.println("server accept client port: "+ ch.remoteAddress().getPort());
                         ChannelPipeline p = ch.pipeline();
                         p.addLast(new MyDecode());
                         p.addLast(new ServerRequestHandler(dis));
