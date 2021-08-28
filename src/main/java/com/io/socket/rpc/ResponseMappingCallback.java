@@ -20,6 +20,7 @@ public class ResponseMappingCallback {
         mapping.remove(requestID);
     }
 
+    // 将返回的数据,通过发送过去的RequestID,还给对应的CompletableFuture,并删除对应的RequestID的CompletableFuture
     public static void runCallBack(MsgPack msgPack) {
         CompletableFuture future = mapping.get(msgPack.getMyHeader().getRequestID());
         // 远程调用返回的我们需要的方法返回值

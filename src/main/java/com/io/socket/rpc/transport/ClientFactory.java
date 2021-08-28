@@ -47,6 +47,7 @@ public class ClientFactory {
         long requestID = myHeader.getRequestID();
 
         CompletableFuture future= new CompletableFuture<>();
+        // 异步
         ResponseMappingCallback.addCallBack(requestID,future);
         buffer.writeBytes(header);
         buffer.writeBytes(body);
