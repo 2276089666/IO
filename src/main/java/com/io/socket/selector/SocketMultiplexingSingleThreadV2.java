@@ -36,28 +36,29 @@ public class SocketMultiplexingSingleThreadV2 {
         System.out.println("服务器启动了。。。。。");
         try {
             while (true) {
-                while (selector.select(50) > 0) {
-                    Set<SelectionKey> selectionKeys = selector.selectedKeys();
-                    Iterator<SelectionKey> iter = selectionKeys.iterator();
-                    while (iter.hasNext()) {
-                        SelectionKey key = iter.next();
-                        iter.remove();
-                        if (key.isAcceptable()) {
-                            acceptHandler(key);
-                        } else if (key.isReadable()) {
-                            // 避免readHandler里面的线程还没起来,register新的状态
-                            // 但是由于非阻塞,第二次循环又来了导致重复消费
-                            key.cancel();
-                            readHandler(key);//还是阻塞的嘛？ 即便以抛出了线程去读取，但是在时差里，这个key的read事件会被重复触发
+                // 阻塞的，当超时，或有注册的响应事件，或者被执行wakeup方法时继续
+                selector.select(1000L);
+                Set<SelectionKey> selectionKeys = selector.selectedKeys();
+                Iterator<SelectionKey> iter = selectionKeys.iterator();
+                while (iter.hasNext()) {
+                    SelectionKey key = iter.next();
+                    iter.remove();
+                    if (key.isAcceptable()) {
+                        acceptHandler(key);
+                    } else if (key.isReadable()) {
+                        // 避免readHandler里面的线程还没起来,register新的状态
+                        // 但是由于非阻塞,第二次循环又来了导致重复消费
+                        key.cancel();
+                        readHandler(key);//还是阻塞的嘛？ 即便以抛出了线程去读取，但是在时差里，这个key的read事件会被重复触发
 
-                        } else if(key.isWritable()){
-                            // 避免readHandler里面的线程还没起来,register新的状态
-                            // 但是由于非阻塞,第二次循环又来了导致重复消费
-                            key.cancel();
-                            writeHandler(key);
-                        }
+                    } else if (key.isWritable()) {
+                        // 避免readHandler里面的线程还没起来,register新的状态
+                        // 但是由于非阻塞,第二次循环又来了导致重复消费
+                        key.cancel();
+                        writeHandler(key);
                     }
                 }
+
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -65,7 +66,7 @@ public class SocketMultiplexingSingleThreadV2 {
     }
 
     private void writeHandler(SelectionKey key) {
-        new Thread(()->{
+        new Thread(() -> {
             System.out.println("write handler...");
             SocketChannel client = (SocketChannel) key.channel();
             ByteBuffer buffer = (ByteBuffer) key.attachment();
@@ -84,7 +85,7 @@ public class SocketMultiplexingSingleThreadV2 {
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        }).start();
+        }, "Write Thread " + Thread.currentThread().getId()).start();
 
     }
 
@@ -105,7 +106,7 @@ public class SocketMultiplexingSingleThreadV2 {
     }
 
     public void readHandler(SelectionKey key) {
-        new Thread(()->{
+        new Thread(() -> {
             System.out.println("read handler.....");
             SocketChannel client = (SocketChannel) key.channel();
             ByteBuffer buffer = (ByteBuffer) key.attachment();
@@ -114,10 +115,10 @@ public class SocketMultiplexingSingleThreadV2 {
             try {
                 while (true) {
                     read = client.read(buffer);
-                    System.out.println(Thread.currentThread().getName()+ " " + read);
+                    System.out.println(Thread.currentThread().getName() + " " + read);
                     if (read > 0) {
                         // 让读到得重新写给client
-                        client.register(key.selector(),SelectionKey.OP_WRITE,buffer);
+                        client.register(key.selector(), SelectionKey.OP_WRITE, buffer);
                     } else if (read == 0) {
                         break;
                     } else {
@@ -128,12 +129,12 @@ public class SocketMultiplexingSingleThreadV2 {
             } catch (IOException e) {
                 e.printStackTrace();
             }
-        }).start();
+        }, "Read Thread " + Thread.currentThread().getId()).start();
 
     }
 
     public static void main(String[] args) {
-       SocketMultiplexingSingleThreadV2 service = new SocketMultiplexingSingleThreadV2();
+        SocketMultiplexingSingleThreadV2 service = new SocketMultiplexingSingleThreadV2();
         service.start();
     }
 }

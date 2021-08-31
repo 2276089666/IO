@@ -27,7 +27,7 @@
 
    >p 263
 
-正由于linux采用的第三种策略,才诞生本次的I/O学习
+linux采用的第三种策略
 
 ### 1.4.设置回写相关参数
 
@@ -227,7 +227,7 @@ vm.dirty_writeback_centisecs = 500
 
 1. **on heap**:堆上分配,ByteBuffer.allocate(1024),在JVM的堆上分配一个缓冲区,写入时需要先复制到堆外内存,再从堆外复制到page cache,最后写到磁盘.
 
-2. **off heap**:堆外分配（直接内存）,ByteBuffer.allocateDirect(1024);或者使用unsafe.allocateMemory();(unsafe的需要调用freeMemory()回收,ByteBuffer的GC好像能够回收)不在JVM的堆里,而是在Java进程的堆里(jvm的堆只是java堆的一块分配区域,根据参数-Xms和-Xmx决定,区别就是堆内可以直接存储对象,受GC管理,堆外只能使用字节数组,不受GC管理),它相对于jvm堆,少了一步复制到堆外的过程,直接复制到page cache再写到磁盘.
+2. **off heap**:堆外分配（JVM进程内存）,ByteBuffer.allocateDirect(1024);或者使用unsafe.allocateMemory();(unsafe的需要调用freeMemory()回收,ByteBuffer的GC好像能够回收)不在JVM的堆里,而是在Java进程的堆里(jvm的堆只是java堆的一块分配区域,根据参数-Xms和-Xmx决定,区别就是堆内可以直接存储对象,受GC管理,堆外只能使用字节数组,不受GC管理),它相对于jvm堆,少了一步复制到堆外的过程,直接复制到page cache再写到磁盘.
 
 3. **mmap**:raf.getChannel().map(FileChannel.MapMode.READ_WRITE, 0, 4096)。使用RandomAccessFile获取channel可获取到一个mmap的映射缓冲区,直接对接page cache,不产生系统调用.
 
@@ -383,6 +383,25 @@ vm.dirty_writeback_centisecs = 500
 >2. 同一个线程/进程同时处理多个连接  （Nio）
 
 #### 3.2.1.Nio的优缺点
+
+**Nio的三大组件:**
+
+1. Channel : 一般翻译为通道,既可以从通道中读数据,也可以写数据到通道中
+
+   >- FileChannel: 从文件中读写数据
+   >- DatagramChannel: 通过UDP读写网络中的数据
+   >- SocketChannel: 通过TCP读写网络中的数据
+   >- ServerSocketChannel : 可以监听新进来的TCP连接,对每个新来的连接都会创建一个SocketChannel
+
+2. Buffer : 不同数据类型的buffer,例如ByteBuffer , LongBuffer
+
+   >三种分配: 
+   >
+   >1. 堆上分配
+   >2. 直接内存分配
+   >3. mmp
+
+3. 多路复用器
 
 [nio代码](src/main/java/com/io/socket/nio/SocketNIO.java)
 

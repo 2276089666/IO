@@ -11,8 +11,9 @@ public class MainThread {
         SelectorThreadGroup worker = new SelectorThreadGroup(3,"worker");
         boss.addWorker(worker);
         // boss组监听多个端口
-        boss.bind(9999);
+        boss.bind(9090);
         boss.bind(10000);
+        boss.bind(10002);
 
 
     }

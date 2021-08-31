@@ -12,8 +12,8 @@ import java.util.Set;
 
 /**
  * JVM启动参数可以选择os的不同多路复用器的实现,没配置启动参数,JVM优先选择是epoll
- *  -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.EPollSelectorProvider
- *  -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.PollSelectorProvider
+ * -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.EPollSelectorProvider
+ * -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.PollSelectorProvider
  */
 public class SocketMultiplexingSingleThreadV1 {
 
@@ -50,7 +50,7 @@ public class SocketMultiplexingSingleThreadV1 {
             while (true) {
 
                 Set<SelectionKey> keys = selector.keys();
-                System.out.println(keys.size()+"   size");
+                System.out.println("key size: " + keys.size());
 
 
                 /*
@@ -60,28 +60,29 @@ public class SocketMultiplexingSingleThreadV1 {
                     2，epoll：  其实是内核的 epoll_wait()
                 selector.wakeup()  叫醒阻塞的select()
                  */
-                while (selector.select() > 0) {
-                    Set<SelectionKey> selectionKeys = selector.selectedKeys();  //返回的有状态的fd集合
-                    Iterator<SelectionKey> iter = selectionKeys.iterator();
 
-                    while (iter.hasNext()) {
-                        SelectionKey key = iter.next();
-                        iter.remove(); //set  不移除会重复循环处理
-                        if (key.isAcceptable()) {
-                            //看代码的时候，这里是重点，如果要去接受一个新的连接
-                            //语义上，accept接受连接且返回新连接的FD对吧？
-                            //那新的FD怎么办？
-                            //select，poll，因为他们内核没有空间，那么在jvm中保存和前边的fd4那个listen的一起
-                            //epoll： 我们希望通过epoll_ctl把新的客户端fd注册到内核空间的红黑树
-                            acceptHandler(key);
-                        } else if (key.isReadable()) {
-                            //连read 还有 write都处理了
-                            //在当前线程，这个方法可能会阻塞  ，如果阻塞了十年，其他的IO早就。。。
-                            //所以，为什么提出了 IO THREADS
-                            //redis  是不是用了epoll，redis是不是有个io threads的概念 ，redis是不是单线程的
-                            //tomcat 8,9  异步的处理方式  IO  和   处理上  解耦
-                            readHandler(key);
-                        }
+                // 阻塞的，当超时，或有注册的响应事件，或者被执行wakeup方法时继续
+                selector.select(1000L);
+                Set<SelectionKey> selectionKeys = selector.selectedKeys();  //返回的有状态的fd集合
+                Iterator<SelectionKey> iter = selectionKeys.iterator();
+
+                while (iter.hasNext()) {
+                    SelectionKey key = iter.next();
+                    iter.remove(); //set  不移除会重复循环处理
+                    if (key.isAcceptable()) {
+                        //看代码的时候，这里是重点，如果要去接受一个新的连接
+                        //语义上，accept接受连接且返回新连接的FD对吧？
+                        //那新的FD怎么办？
+                        //select，poll，因为他们内核没有空间，那么在jvm中保存和前边的fd4那个listen的一起
+                        //epoll： 我们希望通过epoll_ctl把新的客户端fd注册到内核空间的红黑树
+                        acceptHandler(key);
+                    } else if (key.isReadable()) {
+                        //连read 还有 write都处理了
+                        //在当前线程，这个方法可能会阻塞  ，如果阻塞了十年，其他的IO早就。。。
+                        //所以，为什么提出了 IO THREADS
+                        //redis  是不是用了epoll，redis是不是有个io threads的概念 ，redis是不是单线程的
+                        //tomcat 8,9  异步的处理方式  IO  和   处理上  解耦
+                        readHandler(key);
                     }
                 }
             }

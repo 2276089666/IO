@@ -64,8 +64,8 @@ public class SelectorThread extends ThreadLocal<LinkedBlockingDeque<Channel>> im
                     // 服务端注册到selector
                     if (channel instanceof ServerSocketChannel) {
 
-                        System.out.println(Thread.currentThread().getName() + " register listen...");
                         ServerSocketChannel server = (ServerSocketChannel) channel;
+                        System.out.println(Thread.currentThread().getName() + " register listen..."+server.socket().getLocalPort());
                         server.register(selector, SelectionKey.OP_ACCEPT);
                         // 客户端注册到selector
                     } else if (channel instanceof SocketChannel) {
